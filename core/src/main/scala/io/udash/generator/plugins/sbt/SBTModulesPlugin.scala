@@ -30,28 +30,30 @@ object SBTModulesPlugin extends GeneratorPlugin with SBTProjectFiles with Fronte
   }
 
   private def scalajsWorkbenchSettings(settings: GeneratorSettings) =
-    s""".settings(workbenchSettings:_*)
-       |  .settings(
-       |    bootSnippet := "${settings.rootPackage.mkPackage()}.Init().main();",
-       |    updatedJS := {
-       |      var files: List[String] = Nil
-       |      ((crossTarget in Compile).value / StaticFilesDir ** "*.js").get.foreach {
-       |        (x: File) =>
-       |          streams.value.log.info("workbench: Checking " + x.getName)
-       |          FileFunction.cached(streams.value.cacheDirectory / x.getName, FilesInfo.lastModified, FilesInfo.lastModified) {
-       |            (f: Set[File]) =>
-       |              val fsPath = f.head.getAbsolutePath.drop(new File("").getAbsolutePath.length)
-       |              files = "http://localhost:12345" + fsPath :: files
-       |              f
-       |          }(Set(x))
-       |      }
-       |      files
-       |    },
-       |    //// use either refreshBrowsers OR updateBrowsers
-       |    // refreshBrowsers <<= refreshBrowsers triggeredBy (compileStatics in Compile)
-       |    updateBrowsers <<= updateBrowsers triggeredBy (compileStatics in Compile)
-       |  )
-       |""".stripMargin
+    if (settings.shouldEnableJsWorkbench)
+      s""".settings(workbenchSettings:_*)
+         |  .settings(
+         |    bootSnippet := "${settings.rootPackage.mkPackage()}.Init().main();",
+         |    updatedJS := {
+         |      var files: List[String] = Nil
+         |      ((crossTarget in Compile).value / StaticFilesDir ** "*.js").get.foreach {
+         |        (x: File) =>
+         |          streams.value.log.info("workbench: Checking " + x.getName)
+         |          FileFunction.cached(streams.value.cacheDirectory / x.getName, FilesInfo.lastModified, FilesInfo.lastModified) {
+         |            (f: Set[File]) =>
+         |              val fsPath = f.head.getAbsolutePath.drop(new File("").getAbsolutePath.length)
+         |              files = "http://localhost:12345" + fsPath :: files
+         |              f
+         |          }(Set(x))
+         |      }
+         |      files
+         |    },
+         |    //// use either refreshBrowsers OR updateBrowsers
+         |    // refreshBrowsers <<= refreshBrowsers triggeredBy (compileStatics in Compile)
+         |    updateBrowsers <<= updateBrowsers triggeredBy (compileStatics in Compile)
+         |  )
+         |""".stripMargin
+    else ""
 
   /**
     * Creates modules dirs:<br/>
@@ -131,6 +133,12 @@ object SBTModulesPlugin extends GeneratorPlugin with SBTProjectFiles with Fronte
     * and appends `build.sbt` modules config with dependencies config in `project/Dependencies.scala`.
     */
   private def generateStandardProject(backend: File, shared: File, frontend: File, settings: GeneratorSettings): Unit = {
+    createModulesDirs(Seq(backend, shared, frontend), settings)
+    createFrontendExtraDirs(frontend, settings, Option(frontend.getName))
+
+    requireFilesExist(Seq(buildSbt(settings), projectDir(settings), udashBuildScala(settings), dependenciesScala(settings)))
+    generateFrontendTasks(udashBuildScala(settings), indexDevHtml(frontend), indexProdHtml(frontend))
+
     val rootModuleName = wrapValName(settings.projectName)
     val backendModuleName = wrapValName(backend.getName)
     val frontendModuleName = wrapValName(frontend.getName)
@@ -142,14 +150,6 @@ object SBTModulesPlugin extends GeneratorPlugin with SBTProjectFiles with Fronte
     val backendDepsName = wrapValName("backendDeps")
     val frontendDepsName = wrapValName("frontendDeps")
     val frontendJSDepsName = wrapValName("frontendJSDeps")
-
-    createModulesDirs(Seq(backend, shared, frontend), settings)
-    createFrontendExtraDirs(frontend, settings, Option(frontendModuleName))
-
-    requireFilesExist(Seq(buildSbt(settings), projectDir(settings), udashBuildScala(settings), dependenciesScala(settings)))
-    generateFrontendTasks(udashBuildScala(settings), indexDevHtml(frontend), indexProdHtml(frontend))
-
-
 
     appendFile(buildSbt(settings))(
       s"""def crossLibs(configuration: Configuration) =
@@ -247,7 +247,24 @@ object SBTModulesPlugin extends GeneratorPlugin with SBTProjectFiles with Fronte
       case Some(name) => name + "/"
     }
 
+    val scripts =
+      if (settings.shouldEnableJsWorkbench)
+        s"""
+           |    <script src="http://localhost:12345/${frontendDirectoryName}target/UdashStatic/WebContent/scripts/${settings.frontendDepsFastJs}"></script>
+           |    <script src="http://localhost:12345/${frontendDirectoryName}target/UdashStatic/WebContent/scripts/${settings.frontendImplFastJs}"></script>
+           |    <script src="http://localhost:12345/${frontendDirectoryName}target/UdashStatic/WebContent/scripts/${settings.frontendInitJs}"></script>
+           |    <script src="http://localhost:12345/workbench.js"></script>
+            """.stripMargin
+      else
+        s"""
+           |    <script src="scripts/${settings.frontendDepsFastJs}"></script>
+           |    <script src="scripts/${settings.frontendImplFastJs}"></script>
+           |    <script src="scripts/${settings.frontendInitJs}"></script>
+            """.stripMargin
+
+
     createFiles(Seq(indexDev, indexProd), requireNotExists = true)
+
     writeFile(indexDev)(
       s"""<!DOCTYPE html>
           |<html>
@@ -255,10 +272,7 @@ object SBTModulesPlugin extends GeneratorPlugin with SBTProjectFiles with Fronte
           |    <meta charset="UTF-8">
           |    <title>${settings.projectName} - development</title>
           |
-          |    <script src="http://localhost:12345/${frontendDirectoryName}target/UdashStatic/WebContent/scripts/${settings.frontendDepsFastJs}"></script>
-          |    <script src="http://localhost:12345/${frontendDirectoryName}target/UdashStatic/WebContent/scripts/${settings.frontendImplFastJs}"></script>
-          |    <script src="http://localhost:12345/${frontendDirectoryName}target/UdashStatic/WebContent/scripts/${settings.frontendInitJs}"></script>
-          |    <script src="http://localhost:12345/workbench.js"></script>
+          |    $scripts
           |
           |    $HTMLHeadPlaceholder
           |</head>
